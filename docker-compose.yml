@@ -1,0 +1,72 @@
+version: "3.9"
+
+# ----------------------------------------------------------------------------
+# SmartReserve local dev stack: Postgres + backend + frontend.
+# `docker-compose up --build` brings the whole thing online.
+# ----------------------------------------------------------------------------
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: smartreserve-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: smartreserve
+      POSTGRES_PASSWORD: smartreserve
+      POSTGRES_DB: smartreserve
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U smartreserve -d smartreserve"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: smartreserve-backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: development
+      PORT: 4000
+      DATABASE_URL: postgresql://smartreserve:smartreserve@db:5432/smartreserve?schema=public
+      JWT_SECRET: dev-only-secret-change-me
+      JWT_EXPIRES_IN: 1h
+      CORS_ORIGIN: http://localhost:3000
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-sk_test_replace_me}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-whsec_replace_me}
+      STRIPE_SUCCESS_URL: http://localhost:3000/payment/success
+      STRIPE_CANCEL_URL: http://localhost:3000/payment/cancel
+      SMTP_HOST: ${SMTP_HOST:-smtp.mailtrap.io}
+      SMTP_PORT: ${SMTP_PORT:-2525}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      EMAIL_FROM: ${EMAIL_FROM:-no-reply@smartreserve.local}
+    ports:
+      - "4000:4000"
+    # `prisma migrate deploy` runs migrations on every startup; safe + idempotent.
+    command: sh -c "npx prisma migrate deploy && npm run dev"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: smartreserve-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:4000/api
+    ports:
+      - "3000:3000"
+    command: npm run dev
+
+volumes:
+  db_data:

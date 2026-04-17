@@ -1,0 +1,70 @@
+// ----------------------------------------------------------------------------
+// SmartReserve Prisma schema
+//
+// Design notes:
+//  - UUID primary keys (safe to expose in URLs, no sequential guessing).
+//  - Unique composite index on (date, startTime) guarantees — at the DB level —
+//    that two confirmed bookings can never share a slot, even under races.
+//  - Status enum explicitly models PENDING_PAYMENT so we don't "confirm" until
+//    Stripe tells us the charge succeeded via webhook.
+//  - Indexes on userId + status support the admin dashboard queries.
+// ----------------------------------------------------------------------------
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum BookingStatus {
+  PENDING_PAYMENT
+  CONFIRMED
+  CANCELLED
+}
+
+model User {
+  id        String    @id @default(uuid())
+  email     String    @unique
+  password  String
+  name      String
+  role      Role      @default(USER)
+  bookings  Booking[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([role])
+}
+
+model Booking {
+  id          String        @id @default(uuid())
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId      String
+  date        DateTime      // day of the booking (normalized to 00:00 UTC)
+  startTime   DateTime      // exact slot start (UTC)
+  endTime     DateTime      // exact slot end (UTC)
+  status      BookingStatus @default(PENDING_PAYMENT)
+  notes       String?
+  priceCents  Int           // captured at booking time, in smallest currency unit
+  currency    String        @default("usd")
+
+  // Stripe bookkeeping
+  stripeSessionId String?   @unique
+  paidAt          DateTime?
+
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  // DB-level double-booking prevention. Combined with the service-layer
+  // transaction this makes double booking a two-lock problem: impossible.
+  @@unique([date, startTime], name: "unique_slot")
+  @@index([userId])
+  @@index([status])
+}
